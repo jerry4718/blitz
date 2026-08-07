@@ -907,6 +907,11 @@ impl Node {
         self.tree().get(id).unwrap()
     }
 
+    #[track_caller]
+    pub fn try_with(&self, id: NodeId) -> Option<&Node> {
+        self.tree().get(id)
+    }
+
     pub fn print_tree(&self, level: usize) {
         println!(
             "{} {} {:?} {} {:?}",
@@ -1405,12 +1410,12 @@ impl Node {
             if matches_hoisted_content {
                 if let Some(hoisted) = &self.stacking_context {
                     for hoisted_child in hoisted.pos_z_hoisted_children().rev() {
+                        let Some(child) = self.try_with(hoisted_child.node_id) else {
+                            continue;
+                        };
                         let x = x - hoisted_child.position.x;
                         let y = y - hoisted_child.position.y;
-                        if let Some(hit) = self
-                            .with(hoisted_child.node_id)
-                            .hit_inner(x, y, scale, scrollbar)
-                        {
+                        if let Some(hit) = child.hit_inner(x, y, scale, scrollbar) {
                             return Some(hit);
                         }
                     }
@@ -1419,7 +1424,10 @@ impl Node {
 
             // Call `.hit()` on each child in turn. If any return `Some` then return that value. Else return `Some(self.id).
             for child_id in self.paint_children.borrow().iter().flatten().rev() {
-                if let Some(hit) = self.with(*child_id).hit_inner(x, y, scale, scrollbar) {
+                let Some(child) = self.try_with(*child_id) else {
+                    continue;
+                };
+                if let Some(hit) = child.hit_inner(x, y, scale, scrollbar) {
                     return Some(hit);
                 }
             }
@@ -1428,12 +1436,12 @@ impl Node {
             if matches_hoisted_content {
                 if let Some(hoisted) = &self.stacking_context {
                     for hoisted_child in hoisted.neg_z_hoisted_children().rev() {
+                        let Some(child) = self.try_with(hoisted_child.node_id) else {
+                            continue;
+                        };
                         let x = x - hoisted_child.position.x;
                         let y = y - hoisted_child.position.y;
-                        if let Some(hit) = self
-                            .with(hoisted_child.node_id)
-                            .hit_inner(x, y, scale, scrollbar)
-                        {
+                        if let Some(hit) = child.hit_inner(x, y, scale, scrollbar) {
                             return Some(hit);
                         }
                     }
