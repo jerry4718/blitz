@@ -19,6 +19,7 @@ thread_local! {
 }
 
 use style::selector_parser::RestyleDamage;
+use style::values::computed::Overflow;
 use taffy::AvailableSpace;
 
 use crate::{
@@ -167,19 +168,44 @@ impl BaseDocument {
         timer.print_times(&format!("Resolve({}): ", self.id()));
     }
 
+    /// Whether the box is a scroll container (`overflow` scrollable on either axis). A scroll
+    /// container clips its own overflow, so it contributes only its own border box to its
+    /// parent's scrollable overflow; any other box propagates the union of its content.
+    fn is_scroll_container(&self, node_id: NodeId) -> bool {
+        self.nodes[node_id]
+            .primary_styles()
+            .map(|styles| {
+                let scrollable = |overflow: Overflow| {
+                    matches!(
+                        overflow,
+                        Overflow::Scroll | Overflow::Auto | Overflow::Hidden
+                    )
+                };
+                scrollable(styles.clone_overflow_x()) || scrollable(styles.clone_overflow_y())
+            })
+            .unwrap_or(false)
+    }
+
     fn resolve_transforms(&mut self, node_id: NodeId) -> Rect {
         if !self.nodes.contains_key(node_id) {
             return Rect::ZERO;
         }
 
         let scale = self.viewport.scale_f64();
+        let node = &self.nodes[node_id];
 
-        if !self.nodes[node_id]
+        // The node's own border box in device pixels, in the node's own
+        // (pre-transform) coordinate system.
+        let own = {
+            let size = node.final_layout().size.map(|v| v as f64 * scale);
+            Rect::new(0.0, 0.0, size.width, size.height)
+        };
+
+        if !node
             .damage()
             .map(|d| d.contains(style::selector_parser::RestyleDamage::RECALCULATE_OVERFLOW))
             .unwrap_or(false)
         {
-            let node = &self.nodes[node_id];
             let location = node.final_layout().location.map(|v| v as f64 * scale);
 
             let mut transform = Affine::translate((location.x, location.y));
@@ -188,7 +214,12 @@ impl BaseDocument {
             }
 
             let overflow = *node.scrollable_overflow();
-            return transform.transform_rect_bbox(overflow);
+            let contribution = if self.is_scroll_container(node_id) {
+                own
+            } else {
+                overflow
+            };
+            return transform.transform_rect_bbox(contribution);
         }
 
         let transform = self.nodes[node_id].set_transform(scale as f32);
@@ -217,6 +248,14 @@ impl BaseDocument {
         *self.nodes[node_id].scrollable_overflow_mut() = overflow;
         *self.nodes[node_id].layout_children.get_mut() = layout_children;
 
+        // The stored value keeps the full content union (the node's own scrollable range);
+        // only what is handed to the parent is clipped at a scroll container boundary.
+        let contribution = if self.is_scroll_container(node_id) {
+            Rect::new(0.0, 0.0, w, h)
+        } else {
+            overflow
+        };
+
         let scaled_x = self.nodes[node_id].final_layout().location.x as f64 * scale;
         let scaled_y = self.nodes[node_id].final_layout().location.y as f64 * scale;
 
@@ -226,7 +265,7 @@ impl BaseDocument {
             Affine::translate((scaled_x, scaled_y))
         };
 
-        full.transform_rect_bbox(overflow)
+        full.transform_rect_bbox(contribution)
     }
 
     /// Ensure that the layout_children field is populated for all nodes
