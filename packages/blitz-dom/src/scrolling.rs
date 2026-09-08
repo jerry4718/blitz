@@ -446,22 +446,22 @@ impl BaseDocument {
                 // The viewport scrolls the root element's scrollable overflow, which includes
                 // both the root element itself and any content which overflows it (e.g. when
                 // the root element has a fixed height but its content is taller). A document
-                // without a root element has no scrollable content.
+                // without a root element has no scrollable content. The transform-aware value
+                // from `resolve_transforms` is what is actually painted; the layout-time
+                // overflow knows nothing of transforms and would grant scroll range for
+                // content that the transform pulls back into the window.
+                let scale = self.viewport.scale() as f64;
                 let (content_width, content_height) = match self.try_root_element() {
                     Some(root) => {
                         let layout = root.final_layout();
+                        let overflow = root.scrollable_overflow();
                         (
-                            layout.size.width.max(layout.scrollable_overflow_rect.right) as f64,
-                            layout
-                                .size
-                                .height
-                                .max(layout.scrollable_overflow_rect.bottom)
-                                as f64,
+                            (layout.size.width as f64).max(overflow.x1 / scale),
+                            (layout.size.height as f64).max(overflow.y1 / scale),
                         )
                     }
                     None => (0.0, 0.0),
                 };
-                let scale = self.viewport.scale() as f64;
                 let window_width = self.viewport.window_size.0 as f64 / scale;
                 let window_height = self.viewport.window_size.1 as f64 / scale;
                 let max = Point {
@@ -491,13 +491,26 @@ impl BaseDocument {
                         )
                     })
                     .unwrap_or((false, false));
+
+                // The transform-aware overflow (device pixels, own coordinate system) is the
+                // extent that is actually painted; see the viewport branch. Its far edge is a
+                // coordinate, while the scroll range is an offset, so the node's own size is
+                // subtracted (the maximum offset of a box is the extent its content reaches
+                // minus the box's own height).
+                let scale = self.viewport.scale() as f64;
+                let layout = node.final_layout();
+                let overflow = node.scrollable_overflow();
                 let max = Point {
                     x: match can_x_scroll {
-                        true => node.final_layout().scroll_width() as f64,
+                        true => ((layout.size.width as f64).max(overflow.x1 / scale)
+                            - layout.size.width as f64)
+                            .max(0.0),
                         false => 0.0,
                     },
                     y: match can_y_scroll {
-                        true => node.final_layout().scroll_height() as f64,
+                        true => ((layout.size.height as f64).max(overflow.y1 / scale)
+                            - layout.size.height as f64)
+                            .max(0.0),
                         false => 0.0,
                     },
                 };
